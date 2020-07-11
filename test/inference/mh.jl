@@ -14,11 +14,15 @@ include(dir*"/test/test_utils/AllUtils.jl")
             (:m, GKernel(3.0)))
         s2 = MH(:s, :m)
         s3 = MH()
-        s4 = Gibbs(MH(:m), MH(:s))
+        for s in (s1, s2, s3)
+            @test DynamicPPL.alg_str(Sampler(s, gdemo_default)) == "MH"
+        end
 
         c1 = sample(gdemo_default, s1, N)
         c2 = sample(gdemo_default, s2, N)
         c3 = sample(gdemo_default, s3, N)
+
+        s4 = Gibbs(MH(:m), MH(:s))
         c4 = sample(gdemo_default, s4, N)
     end
     @numerical_testset "mh inference" begin
@@ -84,5 +88,49 @@ include(dir*"/test/test_utils/AllUtils.jl")
         chain = sample(model, MH(), 100)
 
         @test chain isa MCMCChains.Chains
+    end
+
+    @turing_testset "proposal matrix" begin
+        Random.seed!(100)
+        
+        mat = [1.0 -0.05; -0.05 1.0]
+
+        prop1 = mat # Matrix only constructor
+        prop2 = AdvancedMH.RandomWalkProposal(MvNormal(mat)) # Explicit proposal constructor
+
+        spl1 = MH(prop1)
+        spl2 = MH(prop2)
+
+        # Test that the two constructors are equivalent.
+        @test spl1.proposals.proposal.μ == spl2.proposals.proposal.μ
+        @test spl1.proposals.proposal.Σ.mat == spl2.proposals.proposal.Σ.mat
+
+        # Test inference.
+        chain1 = sample(gdemo_default, spl1, 10000)
+        chain2 = sample(gdemo_default, spl2, 10000)
+
+        check_gdemo(chain1)
+        check_gdemo(chain2)
+    end
+
+    @turing_testset "vector of multivariate distributions" begin
+        @model function test(k)
+            T = Vector{Vector{Float64}}(undef, k)
+            for i in 1:k
+                T[i] ~ Dirichlet(5, 1.0)
+            end
+        end
+
+        Random.seed!(100)
+        chain = sample(test(1), MH(), 5_000)
+        for i in 1:5
+            @test mean(chain, "T[1][$i]") ≈ 0.2 atol=0.01
+        end
+
+        Random.seed!(100)
+        chain = sample(test(10), MH(), 5_000)
+        for j in 1:10, i in 1:5
+            @test mean(chain, "T[$j][$i]") ≈ 0.2 atol=0.01
+        end
     end
 end

@@ -61,14 +61,13 @@ HMC(0.05, 10)
 
 Tips:
 
-- If you are receiving gradient errors when using `HMC`, try reducing the
-`step_size` parameter, e.g.
+- If you are receiving gradient errors when using `HMC`, try reducing the leapfrog step size `ϵ`, e.g.
 
 ```julia
-# Original step_size
+# Original step size
 sample(gdemo([1.5, 2]), HMC(0.1, 10), 1000)
 
-# Reduced step_size.
+# Reduced step size
 sample(gdemo([1.5, 2]), HMC(0.01, 10), 1000)
 ```
 """
@@ -77,7 +76,8 @@ mutable struct HMC{AD, space, metricT <: AHMC.AbstractMetric} <: StaticHamiltoni
     n_leapfrog  ::  Int       # leapfrog step number
 end
 
-alg_str(::Sampler{<:Hamiltonian}) = "HMC"
+DynamicPPL.alg_str(::Sampler{<:Hamiltonian}) = "HMC"
+isgibbscomponent(::Hamiltonian) = true
 
 HMC(args...; kwargs...) = HMC{ADBackend()}(args...; kwargs...)
 function HMC{AD}(ϵ::Float64, n_leapfrog::Int, ::Type{metricT}, space::Tuple) where {AD, metricT <: AHMC.AbstractMetric}
@@ -103,7 +103,7 @@ end
 function update_hamiltonian!(spl, model, n)
     metric = gen_metric(n, spl)
     ℓπ = gen_logπ(spl.state.vi, spl, model)
-    ∂ℓπ∂θ = gen_∂logπ∂θ(spl.state.vi, spl, model)    
+    ∂ℓπ∂θ = gen_∂logπ∂θ(spl.state.vi, spl, model)
     spl.state.h = AHMC.Hamiltonian(metric, ℓπ, ∂ℓπ∂θ)
     return spl
 end
@@ -122,28 +122,30 @@ function AbstractMCMC.sample_init!(
     set_resume!(spl; resume_from=resume_from, kwargs...)
 
     # Get `init_theta`
-    initialize_parameters!(spl; verbose=verbose, kwargs...)
+    initialize_parameters!(spl; init_theta=init_theta, verbose=verbose, kwargs...)
     if init_theta !== nothing
         # Doesn't support dynamic models
         link!(spl.state.vi, spl)
         model(spl.state.vi, spl)
         theta = spl.state.vi[spl]
-        spl.state.z.θ .= theta
+        update_hamiltonian!(spl, model, length(theta))
+        # Refresh the internal cache phase point z's hamiltonian energy.
+        spl.state.z = AHMC.phasepoint(rng, theta, spl.state.h)
     else
         # Samples new values and sets trans to true, then computes the logp
         model(empty!(spl.state.vi), SampleFromUniform())
         link!(spl.state.vi, spl)
         theta = spl.state.vi[spl]
-        resize!(spl.state.z.θ, length(theta))
-        spl.state.z.θ .= theta
         update_hamiltonian!(spl, model, length(theta))
+        # Refresh the internal cache phase point z's hamiltonian energy.
+        spl.state.z = AHMC.phasepoint(rng, theta, spl.state.h)
         while !isfinite(spl.state.z.ℓπ.value) || !isfinite(spl.state.z.ℓπ.gradient)
             model(empty!(spl.state.vi), SampleFromUniform())
             link!(spl.state.vi, spl)
             theta = spl.state.vi[spl]
-            resize!(spl.state.z.θ, length(theta))
-            spl.state.z.θ .= theta
             update_hamiltonian!(spl, model, length(theta))
+            # Refresh the internal cache phase point z's hamiltonian energy.
+            spl.state.z = AHMC.phasepoint(rng, theta, spl.state.h)
         end
     end
 
@@ -480,7 +482,7 @@ end
 Generate a function that takes `θ` and returns logpdf at `θ` for the model specified by
 `(vi, spl, model)`.
 """
-function gen_logπ(vi, spl::Sampler, model)
+function gen_logπ(vi, spl::AbstractSampler, model)
     function logπ(x)::Float64
         x_old, lj_old = vi[spl], getlogp(vi)
         vi[spl] = x
@@ -505,6 +507,7 @@ gen_traj(alg::NUTS, ϵ) = AHMC.NUTS(AHMC.Leapfrog(ϵ), alg.max_depth, alg.Δ_max
 #### Compiler interface, i.e. tilde operators.
 ####
 function DynamicPPL.assume(
+    rng,
     spl::Sampler{<:Hamiltonian},
     dist::Distribution,
     vn::VarName,
@@ -522,6 +525,7 @@ function DynamicPPL.assume(
 end
 
 function DynamicPPL.dot_assume(
+    rng,
     spl::Sampler{<:Hamiltonian},
     dist::MultivariateDistribution,
     vns::AbstractArray{<:VarName},
@@ -535,6 +539,7 @@ function DynamicPPL.dot_assume(
     return var, sum(logpdf_with_trans(dist, r, istrans(vi, vns[1])))
 end
 function DynamicPPL.dot_assume(
+    rng,
     spl::Sampler{<:Hamiltonian},
     dists::Union{Distribution, AbstractArray{<:Distribution}},
     vns::AbstractArray{<:VarName},

@@ -60,6 +60,9 @@ function AbstractMCMC.sample_init!(
         gradient_logp(x, spl.state.vi, model, spl)
     end
 
+    # Set the parameters to a starting value.
+    initialize_parameters!(spl; kwargs...)
+
     model(spl.state.vi, SampleFromUniform())
     link!(spl.state.vi, spl)
     l, dl = _lp(spl.state.vi[spl])
@@ -73,9 +76,6 @@ function AbstractMCMC.sample_init!(
         link!(spl.state.vi, spl)
         model(spl.state.vi, spl)
     end
-
-    # Set the parameters to a starting value.
-    initialize_parameters!(spl; kwargs...)
 
     results = mcmc_with_warmup(
         rng,
@@ -127,7 +127,7 @@ end
     kwargs...
 )
     if progress
-        @warn "[$(alg_str(alg))] Progress logging in Turing is disabled since DynamicHMC provides its own progress meter"
+        @warn "[HMC] Progress logging in Turing is disabled since DynamicHMC provides its own progress meter"
     end
     if resume_from === nothing
         return AbstractMCMC.sample(rng, model, Sampler(alg, model), N;
@@ -149,7 +149,7 @@ function AbstractMCMC.sample(
     kwargs...
 )
     if progress
-        @warn "[$(alg_str(alg))] Progress logging in Turing is disabled since DynamicHMC provides its own progress meter"
+        @warn "[HMC] Progress logging in Turing is disabled since DynamicHMC provides its own progress meter"
     end
     return AbstractMCMC.sample(rng, model, Sampler(alg, model), parallel, N, n_chains;
                                chain_type=chain_type, progress=false, kwargs...)
